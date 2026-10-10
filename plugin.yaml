@@ -1,8 +1,0 @@
-name: agent-ledger
-version: "0.2.0"
-description: Write-ahead ledger for agent side effects — detect tool calls that were issued but never confirmed (lost during compaction teardown).
-provides_hooks:
-  - pre_tool_call
-  - post_tool_call
-  - pre_llm_call
-  - on_session_start
