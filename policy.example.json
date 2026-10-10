@@ -1,0 +1,16 @@
+{
+  "rules": [
+    {"allow": "terminal", "match": "git\\s+(status|diff|log|show)\\b", "reason": "read-only git is fine"},
+    {"allow": "terminal", "match": "^(ls|head|tail|grep|find|pwd|which|echo)\\b[^|]*$", "reason": "read-only inspection without pipes"},
+    {"block": "terminal", "match": "rm\\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)[a-zA-Z]*\\s+(~|/|\\.\\.?/|\\*)", "reason": "destructive recursive deletion"},
+    {"block": "terminal", "match": "m[k]fs\\b", "reason": "filesystem formatting"},
+    {"block": "terminal", "match": "dd\\s+if=.*of=/dev/(sd|nv|vd|hd)", "reason": "raw device write"},
+    {"block": "terminal", "match": "chmod\\s+(-R\\s+)?777\\s+/", "reason": "world-writable root"},
+    {"block": "terminal", "match": "(curl|wget)[^|]*\\|\\s*(ba|z|da)?sh(\\s|$)", "reason": "piped remote execution"},
+    {"block": "*", "match": "cat\\s+~/?\\.?ssh/(id_|authorized|known)|cat\\s+~/?\\.?git-credentials", "reason": "credential store access"},
+    {"block": "*", "match": "cat\\s+/etc/[s]hadow", "reason": "password hash access"},
+    {"block": "terminal", "match": "git\\s+push\\s+(-f|--force)", "reason": "force push"},
+    {"block": "terminal", "match": "git\\s+reset\\s+--hard\\s+origin", "reason": "hard reset to remote discards local state"},
+    {"block": "cronjob", "match": ".", "reason": "cron changes require human approval"}
+  ]
+}
