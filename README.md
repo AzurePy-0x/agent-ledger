@@ -142,6 +142,25 @@ From then on, matching calls (`rm -rf ~`, `curl | bash`, credential reads,
 force pushes, …) are **refused before they run**, with a clear reason fed
 back to the agent.
 
+**Honest coverage — read this before trusting enforcement.** Policy
+matching is signature-based over the extracted command. Like every
+signature system, it is a step behind what nobody has written a rule
+for yet. Known bypass surfaces today:
+
+- `sh -c` string building — the agent composes the destructive string
+  from variables/pieces, so the literal never appears in the command.
+- Environment-variable indirection — `rm -rf $TARGET` where TARGET is
+  set earlier.
+- Split multi-call — do part A in one call, part B in the next, each
+  individually harmless, together not.
+
+Treat enforcement as a **seatbelt, not a wall**: it reliably catches the
+obvious accidental disasters (recursive deletes, pipe-to-shell, secret
+file reads) — which is what the dry-run exists to show you. It does not
+stop a determined evasion; novel evasions remain an open problem, same
+as the posture score. Run dry-run for a few days first and read what it
+would have caught — that report is also the honest measure of coverage.
+
 If agent-ledger has saved your agent from something, a GitHub star and a
 share are the best thank-you. If you want to support development, ping the
 maintainer — but nothing here is gated.
