@@ -108,10 +108,35 @@ python3 test_posture.py && python3 test_posture_unit.py \
   && python3 test_posture_scale.py && python3 selftest.py
 ```
 
-### Daily audit
+### Daily audit (standalone script you schedule yourself)
 
-`posture_daily.py` runs on cron and sends a Telegram report (score + delta +
-top findings, plus a dry-run policy section when a policy is installed).
+`posture_daily.py` is **not** wired into the plugin runtime — you run it from
+your own cron and it sends a Telegram report (score + delta + top findings,
+plus a dry-run policy section when a policy is installed). Per catalog rule
+11 it has **its own credentials**: set `POSTURE_TELEGRAM_BOT_TOKEN` and
+`POSTURE_TELEGRAM_CHAT_ID` in the script's environment (a dedicated bot is
+recommended). It never reads Hermes's `.env` and never reuses Hermes's own
+bot token. Paths follow the active profile via `get_hermes_home()`
+(override with `POSTURE_LEDGER_DB` / `POSTURE_STATE_DIR`).
+
+## Data handling & retention
+
+- The ledger is a **local plaintext SQLite** database at
+  `<hermes_home>/plugin-data/agent-ledger/ledger.db`. It records tool
+  arguments (up to 4000 chars: terminal commands, file contents, MCP args)
+  and a 300-char result digest of every state-changing tool call. Anyone
+  with filesystem access can read it — treat it like your shell history.
+- Ghost warnings injected into context are **session-scoped**: a session
+  only ever sees its own unconfirmed calls.
+- Grace windows are per-tool (e.g. 30 min for `delegate_task`, 15 min for
+  `terminal`) to avoid false ghosts from long-running calls; a late
+  confirmation revives a reported ghost instead of duplicating rows.
+- The ledger is never pruned automatically. If you want a cap, delete old
+  rows yourself, e.g. keep the newest 50000:
+
+```bash
+sqlite3 ~/.hermes/plugin-data/agent-ledger/ledger.db   "DELETE FROM ledger WHERE id NOT IN (SELECT id FROM ledger ORDER BY id DESC LIMIT 50000)"
+```
 
 ## Policy enforcement (free, no license)
 
@@ -122,14 +147,14 @@ opt in:
 1. Install a policy pack:
 
 ```bash
-cp policy.example.json ~/.hermes/agent-ledger/policy.json
+cp policy.example.json ~/.hermes/plugin-data/agent-ledger/policy.json
 ```
 
 2. Watch the dry-run for a few days (blocks are only *logged*, your daily
    report shows what WOULD have been blocked):
 
 ```bash
-echo dry_run > ~/.hermes/agent-ledger/policy_mode
+echo dry_run > ~/.hermes/plugin-data/agent-ledger/policy_mode
 ```
 
 3. Trust it:

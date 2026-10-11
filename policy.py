@@ -29,8 +29,18 @@ import json
 import os
 import re
 
+def _plugin_data_dir():
+    """Active-profile plugin data dir (falls back to ~/.hermes)."""
+    try:
+        from hermes_constants import get_hermes_home
+        home = str(get_hermes_home())
+    except Exception:
+        home = os.path.expanduser("~/.hermes")
+    return os.path.join(home, "plugin-data", "agent-ledger")
+
+
 DEFAULT_POLICY_PATHS = [
-    os.path.expanduser("~/.hermes/agent-ledger/policy.json"),
+    os.path.join(_plugin_data_dir(), "policy.json"),
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "policy.json"),
 ]
 

@@ -49,8 +49,25 @@ MUTATING_TOOLS = frozenset({
 })
 _MUTATING_PREFIXES = ("mcp__",)
 
-# A PENDING row younger than this is never reported: still legitimately in flight.
+# A PENDING row younger than its tool's grace window is never reported:
+# still legitimately in flight. Long-running tools get proportionally longer
+# windows so a slow delegate_task/terminal call is not a false ghost.
 GRACE_SECONDS = 180
+GRACE_SECONDS_BY_TOOL = {
+    "delegate_task": 1800,
+    "terminal": 900,
+    "cronjob": 900,
+    "skill_manage": 600,
+    "memory": 600,
+}
+
+
+def _grace_for(tool_name):
+    base = tool_name.split("__", 1)[0]  # mcp__x -> x prefix match below
+    for prefix, g in GRACE_SECONDS_BY_TOOL.items():
+        if tool_name.startswith(prefix) or tool_name.startswith("mcp__" + prefix):
+            return g
+    return GRACE_SECONDS_BY_TOOL.get(base, GRACE_SECONDS)
 
 _DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ledger.db")
 _alert_fn = None
@@ -138,19 +155,26 @@ class _Ledger:
             rowid = None
             if tool_call_id:
                 row = self._conn.execute(
-                    "SELECT id FROM ledger WHERE tool_call_id=? AND status='PENDING'"
+                    "SELECT id FROM ledger WHERE tool_call_id=?"
+                    " AND status IN ('PENDING','GHOST_REPORTED')"
                     " ORDER BY id ASC LIMIT 1", (tool_call_id,)).fetchone()
                 rowid = row[0] if row else None
             if rowid is None:
-                # FIFO: oldest still-PENDING row for this tool+session. Never LIFO —
-                # with concurrent calls LIFO confirms the wrong row and strands the rest.
+                # FIFO: oldest still-unconfirmed row for this tool+session.
+                # GHOST_REPORTED rows are revivable: a late confirmation is a
+                # resolution, not a duplicate. Never LIFO — with concurrent
+                # calls LIFO confirms the wrong row and strands the rest.
                 row = self._conn.execute(
-                    "SELECT id FROM ledger WHERE tool_name=? AND session_id=? AND status='PENDING'"
-                    " ORDER BY id ASC LIMIT 1", (tool_name, session_id or "")).fetchone()
+                    "SELECT id FROM ledger WHERE tool_name=? AND session_id=?"
+                    " AND status IN ('PENDING','GHOST_REPORTED')"
+                    " ORDER BY CASE status WHEN 'PENDING' THEN 0 ELSE 1 END, id ASC"
+                    " LIMIT 1", (tool_name, session_id or "")).fetchone()
                 if row is None:
                     row = self._conn.execute(
-                        "SELECT id FROM ledger WHERE tool_name=? AND status='PENDING'"
-                        " ORDER BY id ASC LIMIT 1", (tool_name,)).fetchone()
+                        "SELECT id FROM ledger WHERE tool_name=?"
+                        " AND status IN ('PENDING','GHOST_REPORTED')"
+                        " ORDER BY CASE status WHEN 'PENDING' THEN 0 ELSE 1 END, id ASC"
+                        " LIMIT 1", (tool_name,)).fetchone()
                 rowid = row[0] if row else None
             if rowid is not None:
                 self._conn.execute(
@@ -168,13 +192,22 @@ class _Ledger:
                      status, digest, duration_ms, ts))
             self._conn.commit()
 
-    def reconcile(self):
-        """Return genuine ghosts: PENDING past grace with no later confirmation
-        for the same (tool, session)."""
+    def reconcile(self, session_id=None):
+        """Return genuine ghosts: PENDING past their tool's grace window with
+        no later confirmation for the same (tool, session).
+
+        When session_id is given, ONLY rows from that session are reported —
+        one chat must never inherit another chat's ghosts."""
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT id, ts, session_id, tool_name, args_json FROM ledger"
-                " WHERE status='PENDING' ORDER BY id ASC LIMIT 200").fetchall()
+            if session_id:
+                rows = self._conn.execute(
+                    "SELECT id, ts, session_id, tool_name, args_json FROM ledger"
+                    " WHERE status='PENDING' AND session_id=?"
+                    " ORDER BY id ASC LIMIT 200", (session_id,)).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT id, ts, session_id, tool_name, args_json FROM ledger"
+                    " WHERE status='PENDING' ORDER BY id ASC LIMIT 200").fetchall()
             ghosts = []
             for rid, ts, sid, tool, args_json in rows:
                 try:
@@ -182,7 +215,7 @@ class _Ledger:
                            - datetime.fromisoformat(ts)).total_seconds()
                 except Exception:
                     age = 0
-                if age < GRACE_SECONDS:
+                if age < _grace_for(tool):
                     continue
                 # Any confirmed/error row for the same tool+session at a later ts
                 # means the action did complete — the row was orphaned by an id
@@ -313,7 +346,8 @@ def on_post_tool_call(tool_name, args=None, result=None, task_id=None,
 
 
 def reconcile_and_alert(session_id=None, **kwargs):
-    ghosts = _get_ledger().reconcile()
+    # Session-scoped: only report ghosts belonging to THIS session.
+    ghosts = _get_ledger().reconcile(session_id=session_id)
     for g in ghosts:
         _alert(
             f"⚠️ agent-ledger GHOST EFFECT: {g['tool']} issued {g['ts']} "
@@ -333,8 +367,14 @@ def reconcile_and_alert(session_id=None, **kwargs):
 def register(ctx):
     global _alert_fn, DB_PATH
     try:
-        home = getattr(ctx, "hermes_home", None) or os.path.expanduser("~/.hermes")
-        data_dir = os.path.join(home, "agent-ledger")
+        home = getattr(ctx, "hermes_home", None)
+        if not home:
+            try:
+                from hermes_constants import get_hermes_home
+                home = str(get_hermes_home())
+            except Exception:
+                home = os.path.expanduser("~/.hermes")
+        data_dir = os.path.join(home, "plugin-data", "agent-ledger")
         os.makedirs(data_dir, exist_ok=True)
         DB_PATH = os.path.join(data_dir, "ledger.db")
     except Exception:

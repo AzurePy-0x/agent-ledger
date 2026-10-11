@@ -6,10 +6,10 @@ compact report to Telegram. This is the free-tier seed of "posture pro"
 (the paid build adds policy packs, per-session reports, dashboard).
 
 Env:
-  POSTURE_TELEGRAM_BOT_TOKEN   bot token (read from Hermes .env fallback)
-  POSTURE_TELEGRAM_CHAT_ID     chat id
-  POSTURE_LEDGER_DB            ledger path (default ~/.hermes/agent-ledger/ledger.db)
-  POSTURE_STATE_DIR            state dir (default ~/.hermes/agent-ledger)
+  POSTURE_TELEGRAM_BOT_TOKEN   bot token (own env only - never Hermes .env)
+  POSTURE_TELEGRAM_CHAT_ID     chat id (own env only)
+  POSTURE_LEDGER_DB            ledger path (default <hermes_home>/plugin-data/agent-ledger/ledger.db)
+  POSTURE_STATE_DIR            state dir (default <hermes_home>/plugin-data/agent-ledger)
 
 State: ~/.hermes/agent-ledger/posture_state.json remembers the last score
 so the report can show a delta (score going DOWN is the alert-worthy signal).
@@ -27,28 +27,23 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from posture import posture_report, format_report  # noqa: E402
 
+def _hermes_home():
+    """Active Hermes home (profile-aware). Falls back to ~/.hermes."""
+    try:
+        from hermes_constants import get_hermes_home
+        return str(get_hermes_home())
+    except Exception:
+        return os.path.expanduser("~/.hermes")
+
+
 STATE_DIR = os.environ.get(
     "POSTURE_STATE_DIR",
-    os.path.expanduser("~/.hermes/agent-ledger"))
+    os.path.join(_hermes_home(), "plugin-data", "agent-ledger"))
 STATE_FILE = os.path.join(STATE_DIR, "posture_state.json")
 LEDGER = os.environ.get(
     "POSTURE_LEDGER_DB",
-    os.path.expanduser("~/.hermes/agent-ledger/ledger.db"))
+    os.path.join(_hermes_home(), "plugin-data", "agent-ledger", "ledger.db"))
 
-
-def load_env_file(path):
-    """Minimal .env reader so the report works without shell sourcing."""
-    env = {}
-    try:
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, _, v = line.partition("=")
-                    env[k.strip()] = v.strip().strip('"').strip("'")
-    except OSError:
-        pass
-    return env
 
 
 def send_telegram(token, chat_id, text):
@@ -109,9 +104,9 @@ def build_message(rep, prev_score, since_calls, since_ts=""):
             shown += 1
         extra = len(findings) - shown
         if extra > 0:
-            lines.append(f"<i>…+{extra} temuan lain</i>")
+            lines.append(f"<i>…+{extra} more findings</i>")
     else:
-        lines.append("✅ Tidak ada temuan. Posture bersih.")
+        lines.append("✅ No findings. Posture is clean.")
     lines.append("")
     lines.append("Covered: " + ", ".join(rep["coverage"]["covered"]))
 
@@ -126,18 +121,18 @@ def build_message(rep, prev_score, since_calls, since_ts=""):
 
 
 def main():
-    env_file = load_env_file(os.path.expanduser("~/.hermes/.env"))
-    token = os.environ.get("POSTURE_TELEGRAM_BOT_TOKEN",
-                           env_file.get("TELEGRAM_BOT_TOKEN", ""))
-    chat_id = os.environ.get("POSTURE_TELEGRAM_CHAT_ID",
-                             env_file.get("TELEGRAM_CHAT_ID")
-                             or env_file.get("TELEGRAM_HOME_CHANNEL", ""))
+    # Catalog rule 11: credentials only via the caller's own environment.
+    # This script NEVER reads Hermes's .env or reuses Hermes's bot token -
+    # give it POSTURE_TELEGRAM_BOT_TOKEN / POSTURE_TELEGRAM_CHAT_ID directly.
+    token = os.environ.get("POSTURE_TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("POSTURE_TELEGRAM_CHAT_ID", "")
     if not token or not chat_id:
-        print("posture_daily: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID "
-              "tidak tersedia (.env atau env var)", file=sys.stderr)
+        print("posture_daily: set POSTURE_TELEGRAM_BOT_TOKEN and "
+              "POSTURE_TELEGRAM_CHAT_ID in the script's own environment "
+              "(a dedicated bot is recommended)", file=sys.stderr)
         return 1
     if not os.path.exists(LEDGER):
-        print(f"posture_daily: ledger tidak ada: {LEDGER}", file=sys.stderr)
+        print(f"posture_daily: ledger not found: {LEDGER}", file=sys.stderr)
         return 1
 
     # calls since yesterday's run (delta stat)
@@ -168,7 +163,7 @@ def main():
     try:
         send_telegram(token, chat_id, msg)
     except Exception as e:
-        print(f"posture_daily: kirim gagal: {e}", file=sys.stderr)
+        print(f"posture_daily: send failed: {e}", file=sys.stderr)
         return 2
 
     os.makedirs(STATE_DIR, exist_ok=True)
