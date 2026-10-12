@@ -395,6 +395,14 @@ def format_report(rep):
 
 if __name__ == "__main__":
     import sys
-    db = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser(
-        "~/.hermes/agent-ledger/ledger.db")
+    def _hermes_home():
+        """Active Hermes home (profile-aware). Falls back to ~/.hermes."""
+        try:
+            from hermes_constants import get_hermes_home
+            return str(get_hermes_home())
+        except Exception:
+            return os.path.expanduser("~/.hermes")
+
+    db = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
+        _hermes_home(), "plugin-data", "agent-ledger", "ledger.db")
     print(format_report(posture_report(db)))
