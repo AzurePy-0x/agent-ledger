@@ -1,5 +1,5 @@
 name: agent-ledger
-version: "0.4.2"
+version: "0.4.3"
 description: Write-ahead ledger for agent side effects — detects tool calls issued but never confirmed (lost to compaction teardown), injects ghost warnings back into context (session-scoped), plus an OWASP Agentic Top 10 posture scorer. The optional posture_daily.py Telegram report is a standalone script you schedule yourself with its own bot token.
 provides_hooks:
   - pre_tool_call
