@@ -11,7 +11,7 @@ Env:
   POSTURE_LEDGER_DB            ledger path (default <hermes_home>/plugin-data/agent-ledger/ledger.db)
   POSTURE_STATE_DIR            state dir (default <hermes_home>/plugin-data/agent-ledger)
 
-State: ~/.hermes/agent-ledger/posture_state.json remembers the last score
+State: ~/.hermes/plugin-data/agent-ledger/posture_state.json remembers the last score
 so the report can show a delta (score going DOWN is the alert-worthy signal).
 
 Exit codes: 0 sent/skipped-ok, 1 config error, 2 send failure.

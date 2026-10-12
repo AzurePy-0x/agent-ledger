@@ -37,7 +37,7 @@ hermes gateway restart       # plugin loads on the next session
 ## Inspecting the ledger
 
 ```bash
-sqlite3 ~/.hermes/agent-ledger/ledger.db "
+sqlite3 ~/.hermes/plugin-data/agent-ledger/ledger.db "
   SELECT ts, tool_name, status, substr(args_json,1,60)
   FROM ledger ORDER BY id DESC LIMIT 20;"
 ```
@@ -63,7 +63,7 @@ python3 selftest.py
 
 ```bash
 python3 posture.py                          # score the live ledger
-python3 -m posture ~/.hermes/agent-ledger/ledger.db
+python3 -m posture ~/.hermes/plugin-data/agent-ledger/ledger.db
 ```
 
 **Covered from ledger metadata:** ASI02 (tool misuse), ASI05 (unexpected code
@@ -160,7 +160,7 @@ echo dry_run > ~/.hermes/plugin-data/agent-ledger/policy_mode
 3. Trust it:
 
 ```bash
-echo enforce > ~/.hermes/agent-ledger/policy_mode
+echo enforce > ~/.hermes/plugin-data/agent-ledger/policy_mode
 ```
 
 From then on, matching calls (`rm -rf ~`, `curl | bash`, credential reads,

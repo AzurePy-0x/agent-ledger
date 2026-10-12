@@ -10,7 +10,7 @@ Observer-first: never breaks the tool path. Writes are sub-10ms SQLite
 inserts on a dedicated connection with WAL mode.
 
 Policy engine (v0.4.0, free — enforcement included):
-  If ~/.hermes/agent-ledger/policy.json exists, every mutating tool call is
+  If ~/.hermes/plugin-data/agent-ledger/policy.json exists, every mutating tool call is
   checked against it in on_pre_tool_call. Matching `block` rules return
   {"action": "block", "reason": ...} to the hook (the agent's call is
   refused before it runs). Matching `allow` rules exempt the call.
@@ -83,9 +83,13 @@ def _policy_mode_setting():
 
 
 def load_policy_for_hook():
-    """Load rules + mode. Mode: env var > ~/.hermes/agent-ledger/policy_mode > off."""
+    """Load rules + mode. Mode: env var > ~/.hermes/plugin-data/agent-ledger/policy_mode > off."""
     global _policy_rules, _policy_mode
-    import policy as _policy
+    global _policy
+    try:
+        from . import policy as _policy  # package-relative: Hermes loads plugins as hermes_plugins.<slug>
+    except ImportError:
+        import policy as _policy  # direct-script fallback (selftest, CLI)
     _policy_rules = _policy.load_policy()
     mode_file = os.path.join(os.path.dirname(DB_PATH), "policy_mode")
     mode = "off"
@@ -164,17 +168,15 @@ class _Ledger:
                 # GHOST_REPORTED rows are revivable: a late confirmation is a
                 # resolution, not a duplicate. Never LIFO — with concurrent
                 # calls LIFO confirms the wrong row and strands the rest.
+                # Session-scoped only: a confirm must never consume (or revive)
+                # a row from another session — one chat cannot ack another's work.
+                # No same-session match => falls through to the post-without-pre
+                # branch below, which records the fact explicitly.
                 row = self._conn.execute(
                     "SELECT id FROM ledger WHERE tool_name=? AND session_id=?"
                     " AND status IN ('PENDING','GHOST_REPORTED')"
                     " ORDER BY CASE status WHEN 'PENDING' THEN 0 ELSE 1 END, id ASC"
                     " LIMIT 1", (tool_name, session_id or "")).fetchone()
-                if row is None:
-                    row = self._conn.execute(
-                        "SELECT id FROM ledger WHERE tool_name=?"
-                        " AND status IN ('PENDING','GHOST_REPORTED')"
-                        " ORDER BY CASE status WHEN 'PENDING' THEN 0 ELSE 1 END, id ASC"
-                        " LIMIT 1", (tool_name,)).fetchone()
                 rowid = row[0] if row else None
             if rowid is not None:
                 self._conn.execute(
@@ -290,7 +292,6 @@ def on_pre_tool_call(tool_name, args, task_id=None, tool_call_id=None,
         if _policy_rules is None:
             load_policy_for_hook()
         if _policy_rules and _policy_mode != "off":
-            import policy as _policy
             verdict = _policy.check(_policy_rules, tool_name, args)
             if verdict.get("action") == "block":
                 reason = verdict.get("reason", "blocked by policy")
@@ -316,8 +317,11 @@ def on_pre_tool_call(tool_name, args, task_id=None, tool_call_id=None,
                     f"⚠️ agent-ledger policy (dry-run): this {tool_name} call "
                     f"matches a block rule ({reason}). In enforce mode this "
                     f"call would be refused. Proceed only if this is intended.")}
-    except Exception:
-        pass  # fail-open: a broken policy must never wedge the agent
+    except Exception as _e:  # fail-open: a broken policy must never wedge the agent
+        import warnings
+        warnings.warn(f"agent-ledger: policy engine not loaded ({_e!r}) — "
+                      "enforce mode will NOT block; check plugin packaging",
+                      RuntimeWarning, stacklevel=2)
 
     # --- ledger (always) ---------------------------------------------------
     try:
