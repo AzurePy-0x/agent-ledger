@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""posture_daily.py — scheduled Agent Posture audit → Telegram (v0.3.4).
+"""posture_daily.py — scheduled Agent Posture audit → Telegram (v0.4.3).
 
 Runs daily via cron. Reads the live ledger, scores posture, and sends a
 compact report to Telegram. This is the free-tier seed of "posture pro"
@@ -83,7 +83,7 @@ def build_message(rep, prev_score, since_calls, since_ts=""):
     if prev_score is not None and score is not None:
         d = score - prev_score
         arrow = f" ({'+' if d >= 0 else ''}{d} vs kemarin)"
-    lines.append(f"🛡 <b>Agent Posture harian</b>: {score}/100{arrow}")
+    lines.append(f"🛡 <b>Agent Posture daily</b>: {score}/100{arrow}")
     t = rep["totals"]
     lines.append(
         f"<i>{t['calls']} calls (+{since_calls} baru) | "
