@@ -9,7 +9,8 @@ import tempfile
 
 tmp = tempfile.mkdtemp()
 os.environ["AGENT_LEDGER_DB"] = os.path.join(tmp, "ledger.db")
-sys.path.insert(0, "/home/agentuser/agent-ledger-repo")
+REPO = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, REPO)
 import __init__ as al  # noqa: E402
 
 DB = os.environ["AGENT_LEDGER_DB"]
@@ -67,7 +68,7 @@ conn.close()
 check("revival: late confirm updates ghost row (no dup)", n == 1 and st == "CONFIRMED")
 
 # --- FIX 1: posture_daily has no .env fallback -----------------------------
-src = open("/home/agentuser/agent-ledger-repo/posture_daily.py").read()
+src = open(os.path.join(REPO, "posture_daily.py")).read()
 check("creds: no load_env_file left", "load_env_file" not in src)
 check("creds: no TELEGRAM_BOT_TOKEN read", "TELEGRAM_BOT_TOKEN" not in src
       or "POSTURE_TELEGRAM_BOT_TOKEN" in src and '.hermes/.env' not in src)
@@ -76,9 +77,9 @@ check("creds: uses own env names",
 
 # --- FIX 2: profile-aware home ----------------------------------------------
 check("profile: register uses get_hermes_home", "get_hermes_home" in open(
-    "/home/agentuser/agent-ledger-repo/__init__.py").read())
+    os.path.join(REPO, "__init__.py")).read())
 check("profile: plugin-data path", "plugin-data" in open(
-    "/home/agentuser/agent-ledger-repo/__init__.py").read())
+    os.path.join(REPO, "__init__.py")).read())
 
 passed = sum(1 for _, ok in results if ok)
 for name, ok in results:
