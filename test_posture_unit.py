@@ -203,6 +203,17 @@ check("off-hours fires when enabled", "ASI02" in fams(rep))
 rep = posture.posture_report(build(off))
 check("off-hours silent by default", "ASI02" not in fams(rep))
 
+print("== missing ledger file (a freshly installed profile) ==")
+# ledger.db appears on the first recorded call, so every new install starts with no
+# file at all; that must read as "no ledger data" rather than raise.
+absent = os.path.join(tempfile.mkdtemp(), "absent.db")
+try:
+    rep = posture.posture_report(absent)
+    check("missing ledger file -> 'no ledger data', no exception",
+          rep["score"] is None and rep["note"] == "no ledger data")
+except Exception as exc:
+    check(f"missing ledger file -> 'no ledger data', no exception ({exc!r})", False)
+
 print("=" * 50)
 print(f"PASS {len(PASS)} / FAIL {len(FAIL)}")
 if FAIL:

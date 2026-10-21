@@ -187,6 +187,13 @@ def posture_report(db_path, local_hours_start=None, local_hours_end=6):
     module cannot know the operator's timezone — guessing produces false
     alarms. Pass local_hours_start (e.g. 23) together with local_hours_end
     (e.g. 6) to enable it for your local night window."""
+    # A freshly installed profile has no ledger file yet — the plugin creates it on
+    # the first recorded call, and the read-only URI connect below cannot create it.
+    # That state must read as "no ledger data", not raise: it is exactly what a new
+    # install starts in, so every first run of this script hit the exception.
+    if not os.path.exists(db_path):
+        return {"score": None, "findings": [], "coverage": {},
+                "note": "no ledger data"}
     rows = _rows(db_path)
     if not rows:
         return {"score": None, "findings": [], "coverage": {},
