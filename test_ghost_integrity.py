@@ -109,6 +109,25 @@ st3 = led._conn.execute(
 t("no-id orphan with a later confirmation is still RESOLVED",
   g == [] and st3 == "RESOLVED", f"{g} {st3}")
 
+# --- 4. nested dispatches must not be reported as ghosts --------------------
+# On a host that supplies ids, an id-less row comes from a nested dispatch (a tool
+# call made from inside execute_code), which never fires post_tool_call and so can
+# never be confirmed. Reporting it is a false positive.
+led.pending("write_file", "", {"path": "/nested"}, "sessD")
+led.confirm("execute_code", "call_parent", "sessD", "ok", 5, "CONFIRMED")
+led._conn.execute("UPDATE ledger SET ts=? WHERE session_id='sessD' AND tool_call_id=''", (OLD,))
+led._conn.commit()
+gD = [x for x in led.reconcile() if x["session_id"] == "sessD"]
+t("nested id-less row is not reported as a ghost", gD == [], str(gD))
+
+# a host that never supplies ids: every row is id-less, so the heuristic still applies
+led._conn.execute(
+    "INSERT INTO ledger (ts, session_id, tool_call_id, tool_name, args_json, status)"
+    " VALUES (?,?,?,?,?,'PENDING')", (OLD, "sessE", "", "write_file", '{"path":"/legacy"}'))
+led._conn.commit()
+gE = [x for x in led.reconcile() if x["session_id"] == "sessE"]
+t("id-less host still reports its ghosts", len(gE) == 1, str(gE))
+
 print()
 print(f"PASS {PASS} / FAIL {FAIL}")
 sys.exit(0 if FAIL == 0 else 1)

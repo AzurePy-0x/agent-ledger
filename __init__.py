@@ -87,6 +87,25 @@ GRACE_SECONDS_BY_TOOL = {
 }
 
 
+def _host_supplies_ids(conn, session_id):
+    """True when the host passes a tool_call_id for some row in this session.
+
+    A host that supplies ids does so only for the calls it dispatches itself.
+    Id-less rows then come from nested/child dispatches (a tool call made from
+    inside execute_code, for example), which fire pre_tool_call without an id and
+    never fire post_tool_call — they can never be confirmed. When NO row in the
+    session carries an id, the host never supplies them and the original id-less
+    ghost heuristic still applies."""
+    if session_id:
+        row = conn.execute(
+            "SELECT 1 FROM ledger WHERE session_id=? AND tool_call_id<>'' LIMIT 1",
+            (session_id,)).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT 1 FROM ledger WHERE tool_call_id<>'' LIMIT 1").fetchone()
+    return row is not None
+
+
 def _grace_for(tool_name):
     base = tool_name.split("__", 1)[0]  # mcp__x -> x prefix match below
     for prefix, g in GRACE_SECONDS_BY_TOOL.items():
@@ -290,6 +309,13 @@ class _Ledger:
                         " LIMIT 1", (tool, sid, ts)).fetchone()
                 if later:
                     self._conn.execute("UPDATE ledger SET status='RESOLVED' WHERE id=?", (rid,))
+                    continue
+                if not tcid and _host_supplies_ids(self._conn, sid):
+                    # Not evidence of a lost effect: see _host_supplies_ids. The
+                    # nested call's parent IS tracked (it carries an id), so a batch
+                    # that really was lost is still reported against the parent.
+                    # Reporting these instead trains the operator to ignore the
+                    # warning, which is how a real ghost gets missed later.
                     continue
                 ghosts.append({"id": rid, "ts": ts, "session_id": sid,
                                "tool": tool, "args": args_json})
