@@ -46,10 +46,10 @@ MUTATING_TOOLS = frozenset({
     "write_file", "patch", "terminal", "cronjob", "delegate_task",
     "kanban_create", "kanban_complete", "kanban_block", "kanban_unblock",
     "kanban_assign", "kanban_comment", "memory", "skill_manage",
-    # Names current Hermes versions actually register. "cronjob" above is the
-    # toolset/legacy name and matches nothing on >= 0.21 (the tool is
-    # cronjob_manage), so the cron-lost-to-teardown case this plugin exists for
-    # was not covered. The rest are state-mutating and were equally uncovered:
+    # Names Hermes actually registers. "cronjob" above survives only as a legacy
+    # alias — the name the host passes to the hooks is "cronjob_manage" — so the
+    # cron-lost-to-teardown case this plugin exists for was not covered. The rest
+    # are state-mutating and were equally uncovered:
     # execute_code runs arbitrary Python (files, shells, MCP), process_manage
     # kills processes, the kanban attach/link/review calls change shared board
     # state, and computer_use / browser_click|type|press act on a real UI.

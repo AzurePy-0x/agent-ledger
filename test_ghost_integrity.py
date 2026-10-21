@@ -1,6 +1,7 @@
 """test_ghost_integrity.py — ghost integrity, tool coverage, block directive.
 
-Regressions for three defects found while integrating with Hermes 0.21.x:
+Regressions for four defects found while integrating with Hermes — first on a main
+checkout just past 0.21.5; all four are still present in 0.22.2:
 
 1. enforce mode returned ``{"action": "block", "reason": ...}``. The host's
    ``pre_tool_call`` contract reads ``"message"`` and discards a block directive
@@ -12,6 +13,10 @@ Regressions for three defects found while integrating with Hermes 0.21.x:
 3. ``confirm()``'s FIFO fallback let an unrelated later success of the same tool
    in the same session stamp a never-confirmed call CONFIRMED with the wrong
    result digest, and ``reconcile()`` then suppressed it — a real ghost, hidden.
+4. nested dispatches — tool calls made from inside ``execute_code`` — fire
+   ``pre_tool_call`` without a ``tool_call_id`` and never fire ``post_tool_call``,
+   so they can never be confirmed and were reported as ghosts once past their
+   grace window.
 
 Run: python3 test_ghost_integrity.py
 """
