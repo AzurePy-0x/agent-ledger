@@ -46,6 +46,19 @@ MUTATING_TOOLS = frozenset({
     "write_file", "patch", "terminal", "cronjob", "delegate_task",
     "kanban_create", "kanban_complete", "kanban_block", "kanban_unblock",
     "kanban_assign", "kanban_comment", "memory", "skill_manage",
+    # Names current Hermes versions actually register. "cronjob" above is the
+    # toolset/legacy name and matches nothing on >= 0.21 (the tool is
+    # cronjob_manage), so the cron-lost-to-teardown case this plugin exists for
+    # was not covered. The rest are state-mutating and were equally uncovered:
+    # execute_code runs arbitrary Python (files, shells, MCP), process_manage
+    # kills processes, the kanban attach/link/review calls change shared board
+    # state, and computer_use / browser_click|type|press act on a real UI.
+    "cronjob_manage",
+    "execute_code",
+    "process_manage",
+    "kanban_attach", "kanban_attach_url", "kanban_link",
+    "kanban_request_changes", "kanban_request_review",
+    "computer_use", "browser_click", "browser_type", "browser_press",
 })
 _MUTATING_PREFIXES = ("mcp__",)
 
@@ -59,6 +72,18 @@ GRACE_SECONDS_BY_TOOL = {
     "cronjob": 900,
     "skill_manage": 600,
     "memory": 600,
+    # Grace windows for the added tools: execute_code is capped at 5 min by the
+    # host and computer_use is a nested action loop, so both need generous
+    # windows or a slow-but-fine call reports as a false ghost.
+    "execute_code": 900,
+    "computer_use": 1800,
+    "cronjob_manage": 300,
+    "process_manage": 300,
+    "browser_click": 600,
+    "browser_type": 600,
+    "browser_press": 600,
+    "kanban_attach": 600,
+    "kanban_attach_url": 600,
 }
 
 
@@ -77,6 +102,19 @@ _policy_rules = None
 _policy_mode = "off"  # off | dry_run | enforce
 POLICY_MODE_ENV = "AGENT_LEDGER_POLICY_MODE"
 
+# Bind the policy module ONCE at import. check() runs from the pre_tool_call hook,
+# and a module global that only load_policy_for_hook() binds raises NameError for any
+# caller that supplies rules directly (tests, embedders) — which surfaced as
+# "policy engine not loaded ... enforce mode will NOT block" in test_policy_hook.py.
+# Fail-soft: an unbound module leaves the policy inert, never raises.
+try:
+    from . import policy as _policy  # package-relative: Hermes loads plugins as hermes_plugins.<slug>
+except ImportError:
+    try:
+        import policy as _policy  # direct-script fallback (selftest, CLI)
+    except ImportError:
+        _policy = None
+
 
 def _policy_mode_setting():
     return os.environ.get(POLICY_MODE_ENV, _policy_mode)
@@ -85,11 +123,8 @@ def _policy_mode_setting():
 def load_policy_for_hook():
     """Load rules + mode. Mode: env var > ~/.hermes/plugin-data/agent-ledger/policy_mode > off."""
     global _policy_rules, _policy_mode
-    global _policy
-    try:
-        from . import policy as _policy  # package-relative: Hermes loads plugins as hermes_plugins.<slug>
-    except ImportError:
-        import policy as _policy  # direct-script fallback (selftest, CLI)
+    if _policy is None:
+        return [], _policy_mode
     _policy_rules = _policy.load_policy()
     mode_file = os.path.join(os.path.dirname(DB_PATH), "policy_mode")
     mode = "off"
@@ -172,11 +207,27 @@ class _Ledger:
                 # a row from another session — one chat cannot ack another's work.
                 # No same-session match => falls through to the post-without-pre
                 # branch below, which records the fact explicitly.
-                row = self._conn.execute(
-                    "SELECT id FROM ledger WHERE tool_name=? AND session_id=?"
-                    " AND status IN ('PENDING','GHOST_REPORTED')"
-                    " ORDER BY CASE status WHEN 'PENDING' THEN 0 ELSE 1 END, id ASC"
-                    " LIMIT 1", (tool_name, session_id or "")).fetchone()
+                # Only pair a row this confirmation can actually BE. A confirm
+                # that carries a real tool_call_id which matched no row must not
+                # consume an id-carrying PENDING row belonging to a different
+                # call: doing so stamped a genuine never-confirmed call CONFIRMED
+                # with the wrong result digest and hid it from reconcile() (the
+                # session's next success of the same tool silenced the ghost).
+                #   id-carrying confirm -> pair only a pre-row that had no id
+                #   id-less confirm     -> oldest pending row (original FIFO)
+                if tool_call_id:
+                    row = self._conn.execute(
+                        "SELECT id FROM ledger WHERE tool_name=? AND session_id=?"
+                        " AND tool_call_id=''"
+                        " AND status IN ('PENDING','GHOST_REPORTED')"
+                        " ORDER BY CASE status WHEN 'PENDING' THEN 0 ELSE 1 END, id ASC"
+                        " LIMIT 1", (tool_name, session_id or "")).fetchone()
+                else:
+                    row = self._conn.execute(
+                        "SELECT id FROM ledger WHERE tool_name=? AND session_id=?"
+                        " AND status IN ('PENDING','GHOST_REPORTED')"
+                        " ORDER BY CASE status WHEN 'PENDING' THEN 0 ELSE 1 END, id ASC"
+                        " LIMIT 1", (tool_name, session_id or "")).fetchone()
                 rowid = row[0] if row else None
             if rowid is not None:
                 self._conn.execute(
@@ -203,15 +254,15 @@ class _Ledger:
         with self._lock:
             if session_id:
                 rows = self._conn.execute(
-                    "SELECT id, ts, session_id, tool_name, args_json FROM ledger"
+                    "SELECT id, ts, session_id, tool_name, args_json, tool_call_id FROM ledger"
                     " WHERE status='PENDING' AND session_id=?"
                     " ORDER BY id ASC LIMIT 200", (session_id,)).fetchall()
             else:
                 rows = self._conn.execute(
-                    "SELECT id, ts, session_id, tool_name, args_json FROM ledger"
+                    "SELECT id, ts, session_id, tool_name, args_json, tool_call_id FROM ledger"
                     " WHERE status='PENDING' ORDER BY id ASC LIMIT 200").fetchall()
             ghosts = []
-            for rid, ts, sid, tool, args_json in rows:
+            for rid, ts, sid, tool, args_json, tcid in rows:
                 try:
                     age = (datetime.now(timezone.utc)
                            - datetime.fromisoformat(ts)).total_seconds()
@@ -222,10 +273,21 @@ class _Ledger:
                 # Any confirmed/error row for the same tool+session at a later ts
                 # means the action did complete — the row was orphaned by an id
                 # mismatch. Resolve it instead of crying wolf.
-                later = self._conn.execute(
-                    "SELECT 1 FROM ledger WHERE tool_name=? AND session_id=?"
-                    " AND status NOT IN ('PENDING','GHOST_REPORTED') AND ts >= ?"
-                    " LIMIT 1", (tool, sid, ts)).fetchone()
+                # A row that carries its own call id may be resolved only by a
+                # confirmation of that SAME id. The old tool+session heuristic let
+                # any later success of the same tool in the session silence a real
+                # ghost. Rows with no id keep the heuristic — that is the case it
+                # was written for (pre-without-id, id orphaned by a mismatch).
+                if tcid:
+                    later = self._conn.execute(
+                        "SELECT 1 FROM ledger WHERE tool_call_id=?"
+                        " AND status NOT IN ('PENDING','GHOST_REPORTED')"
+                        " LIMIT 1", (tcid,)).fetchone()
+                else:
+                    later = self._conn.execute(
+                        "SELECT 1 FROM ledger WHERE tool_name=? AND session_id=?"
+                        " AND status NOT IN ('PENDING','GHOST_REPORTED') AND ts >= ?"
+                        " LIMIT 1", (tool, sid, ts)).fetchone()
                 if later:
                     self._conn.execute("UPDATE ledger SET status='RESOLVED' WHERE id=?", (rid,))
                     continue
@@ -291,7 +353,7 @@ def on_pre_tool_call(tool_name, args, task_id=None, tool_call_id=None,
     try:
         if _policy_rules is None:
             load_policy_for_hook()
-        if _policy_rules and _policy_mode != "off":
+        if _policy_rules and _policy_mode != "off" and _policy is not None:
             verdict = _policy.check(_policy_rules, tool_name, args)
             if verdict.get("action") == "block":
                 reason = verdict.get("reason", "blocked by policy")
@@ -302,7 +364,13 @@ def on_pre_tool_call(tool_name, args, task_id=None, tool_call_id=None,
                     _policy_mode_local = _policy_mode
                 if _policy_mode_local == "enforce":
                     _alert(f"🚫 agent-ledger POLICY BLOCK: {tool_name} — {reason}")
+                    # "message" is the key the host's pre_tool_call contract reads:
+                    # a block directive WITHOUT a message is discarded and the call
+                    # proceeds (hermes_cli/plugins.py, _get_pre_tool_call_directive_details).
+                    # Returning only "reason" made enforce mode a silent no-op.
+                    # "reason" is kept as well so existing consumers/tests keep working.
                     return {"action": "block",
+                            "message": f"agent-ledger policy: {reason}",
                             "reason": f"agent-ledger policy: {reason}"}
                 # dry_run: record what WOULD have been blocked
                 try:
